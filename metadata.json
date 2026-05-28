@@ -1,0 +1,6 @@
+{
+  "name": "Exnees - Pusat Bantuan Pengguna Aplikasi",
+  "description": "Platform edukasi trading real-time mitra UMKM dengan chart TradingView, otentikasi Firebase (RBAC), dan Asisten AI pintar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

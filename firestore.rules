@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Catch-all default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Backup bootstrapped admin check using the runtime user email
+    function isBootstrappedAdmin() {
+      return isSignedIn() && (request.auth.token.email == 'ronggoumi@gmail.com');
+    }
+
+    // Role check via Firestore document
+    function isAdminDoc() {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || isAdminDoc();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation rules for User Profiles
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'displayName', 'role', 'createdAt', 'lastLoginAt']) &&
+             data.keys().size() == 5 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.displayName is string && data.displayName.size() <= 256 &&
+             data.role is string && (data.role == 'admin' || data.role == 'user') &&
+             data.createdAt is timestamp &&
+             data.lastLoginAt is timestamp;
+    }
+
+    match /users/{userId} {
+      // Allow user to get their own profile, or admin to look up
+      allow get: if isOwner(userId) || isAdmin();
+      
+      // Admin can list all users, also allow basic reading for authenticated users to facilitate secret password authorization
+      allow list: if isAdmin() || isSignedIn();
+
+      // Create profile: User must own the profile path. User can only self-register as 'user' unless they are the bootstrapped email.
+      allow create: if isOwner(userId) && 
+                      isValidUser(incoming()) && 
+                      incoming().createdAt == request.time && 
+                      incoming().lastLoginAt == request.time &&
+                      (incoming().role == 'user' || isBootstrappedAdmin());
+
+      // Update profile: Prevent changing role (unless admin), allow editing display name/last login timestamp.
+      allow update: if isOwner(userId) && 
+                      isValidUser(incoming()) && 
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().lastLoginAt == request.time &&
+                      (incoming().role == existing().role || isBootstrappedAdmin() || isAdminDoc());
+                      
+      allow delete: if isAdmin();
+    }
+
+    // Validation rules for Activity Logs
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['userId', 'email', 'activity', 'timestamp']) &&
+             data.keys().size() == 4 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.activity is string && data.activity.size() <= 500 &&
+             data.timestamp is timestamp;
+    }
+
+    match /activity_logs/{logId} {
+      // Owner or admin can get specific logs
+      allow get: if isAdmin() || (resource.data.userId == request.auth.uid);
+      
+      // Only admin can list all activity logs, also allow read-access for authenticated users to facilitate password gating
+      allow list: if isAdmin() || isSignedIn();
+
+      // Any authenticated user can create log for themselves
+      allow create: if isSignedIn() && 
+                      isValidId(logId) && 
+                      isValidActivityLog(incoming()) &&
+                      incoming().userId == request.auth.uid && 
+                      incoming().timestamp == request.time;
+
+      // Logs are immutable! No updates or deletes allowed once written.
+      allow update, delete: if false;
+    }
+  }
+}
